@@ -1,0 +1,41 @@
+name: Anunciar release en Discord
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  discord:
+    if: ${{ !github.event.release.draft && !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Esperar al instalador
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          for i in $(seq 1 60); do
+            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx 'naurydev-setup.exe'; then
+              echo "instalador presente"; exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::la release no tiene naurydev-setup.exe"; exit 1
+
+      - name: Editar #download y publicar en #changelog
+        env:
+          ADMIN_TOKEN: ${{ secrets.NAURY_ADMIN_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+          BODY: ${{ github.event.release.body }}
+        run: |
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/naurydev-setup.exe"
+          NOTES="${BODY:-Nueva versión de naurydev.}"
+          jq -n --arg v "$TAG" --arg u "$URL" --arg c "$NOTES" '{version:$v, downloadUrl:$u, changelog:$c}' > payload.json
+          code=$(curl -sS -o resp.json -w '%{http_code}' -X POST \
+            -H "x-admin-token: ${ADMIN_TOKEN}" -H 'content-type: application/json' \
+            --data @payload.json https://backend-seven-gray-99.vercel.app/admin/api/release)
+          echo "HTTP $code"; cat resp.json; echo
+          test "$code" = "200" && jq -e '.ok == true' resp.json > /dev/null
